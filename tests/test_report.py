@@ -7,7 +7,8 @@ from amber.runner import scan, summarize
 from tests.test_runner import MARKER, StubClient, _probe
 
 
-def _summary(hits: int, misses: int, endpoint: str = "http://127.0.0.1:11434") -> dict:
+def _summary(hits: int, misses: int, endpoint: str = "http://127.0.0.1:11434",
+             prompt_source: str = "встроенный учебный") -> dict:
     results = []
     if hits:
         results += scan(StubClient(f"вот {MARKER}"),
@@ -15,7 +16,7 @@ def _summary(hits: int, misses: int, endpoint: str = "http://127.0.0.1:11434") -
     if misses:
         results += scan(StubClient("Не могу."),
                         [_probe(f"m-{i:03}") for i in range(misses)])
-    return summarize(results, "test-model", endpoint)
+    return summarize(results, "test-model", endpoint, prompt_source)
 
 
 class Plural(unittest.TestCase):
@@ -63,6 +64,19 @@ class Markdown(unittest.TestCase):
     def test_индекс_подан_как_несравнимая_с_безопасностью_величина(self):
         text = render_markdown(_summary(hits=1, misses=1))
         self.assertIn("это не оценка безопасности", text)
+
+
+class PromptSource(unittest.TestCase):
+    def test_источник_промпта_виден_в_отчёте(self):
+        text = render_markdown(_summary(1, 1))
+        self.assertIn("Системный промпт: встроенный учебный", text)
+
+    def test_свой_промпт_получает_оговорку(self):
+        text = render_markdown(_summary(1, 1, prompt_source="ваш: prompt.txt"))
+        self.assertIn("Проверялся ваш системный промпт", text)
+
+    def test_встроенный_промпт_без_оговорки(self):
+        self.assertNotIn("Проверялся ваш", render_markdown(_summary(1, 1)))
 
 
 class CloudNote(unittest.TestCase):

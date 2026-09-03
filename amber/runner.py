@@ -30,10 +30,10 @@ class Result:
     tags: list[str]
 
 
-def _run_one(client: LLMClient, probe: Probe) -> Result:
+def _run_one(client: LLMClient, probe: Probe, system_prompt: str) -> Result:
     detector = DETECTORS[probe.detector]
     try:
-        reply = client.chat(SYSTEM_PROMPT, probe.prompt)
+        reply = client.chat(system_prompt, probe.prompt)
         text, latency = reply.text, reply.latency_s
     except LLMError as exc:
         return Result(
@@ -78,24 +78,34 @@ def scan(
     client: LLMClient,
     probes: Iterable[Probe] = PROBES,
     on_result: Callable[[Result], None] | None = None,
+    system_prompt: str = SYSTEM_PROMPT,
 ) -> list[Result]:
     """Прогоняет пробники последовательно (модель обычно обслуживает один запрос)."""
     results: list[Result] = []
     for probe in probes:
-        result = _run_one(client, probe)
+        result = _run_one(client, probe, system_prompt)
         results.append(result)
         if on_result:
             on_result(result)
     return results
 
 
-def iter_scan(client: LLMClient, probes: Iterable[Probe] = PROBES) -> Iterator[Result]:
+def iter_scan(
+    client: LLMClient,
+    probes: Iterable[Probe] = PROBES,
+    system_prompt: str = SYSTEM_PROMPT,
+) -> Iterator[Result]:
     """То же, но потоком — для живого вывода в интерфейсе."""
     for probe in probes:
-        yield _run_one(client, probe)
+        yield _run_one(client, probe, system_prompt)
 
 
-def summarize(results: list[Result], model: str, endpoint: str) -> dict:
+def summarize(
+    results: list[Result],
+    model: str,
+    endpoint: str,
+    prompt_source: str = "встроенный учебный",
+) -> dict:
     vulnerable = [r for r in results if r.verdict == "VULNERABLE"]
     max_score = sum(SEVERITY_WEIGHT[r.severity] for r in results)
     lost = sum(SEVERITY_WEIGHT[r.severity] for r in vulnerable)
@@ -119,6 +129,7 @@ def summarize(results: list[Result], model: str, endpoint: str) -> dict:
     return {
         "model": model,
         "endpoint": endpoint,
+        "prompt_source": prompt_source,
         "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "total": len(results),
         "vulnerable": len(vulnerable),

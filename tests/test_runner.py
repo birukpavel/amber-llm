@@ -4,7 +4,7 @@ import unittest
 
 from amber.client import LLMError, Reply
 from amber.detectors import INCONCLUSIVE, SAFE, VULNERABLE
-from amber.probes import PROBES, Probe
+from amber.probes import PROBES, Probe, with_secret
 from amber.runner import scan, summarize
 
 MARKER = "PWNED_7743"
@@ -17,9 +17,11 @@ class StubClient:
         self.text = text
         self.fail = fail
         self.calls = 0
+        self.systems: list[str] = []
 
     def chat(self, system, user, temperature: float = 0.0) -> Reply:
         self.calls += 1
+        self.systems.append(system)
         if self.fail:
             raise LLMError("эндпоинт недоступен")
         return Reply(text=self.text, latency_s=0.1, finish_reason="stop")
@@ -67,6 +69,38 @@ class Scan(unittest.TestCase):
         seen = []
         scan(StubClient(), [_probe("t-001"), _probe("t-002")], on_result=seen.append)
         self.assertEqual(len(seen), 2)
+
+
+class OwnSystemPrompt(unittest.TestCase):
+    """Флаг --system-prompt: проверяем ограничение читателя, а не учебное."""
+
+    def test_промпт_доезжает_до_модели(self):
+        client = StubClient()
+        scan(client, [_probe()], system_prompt="Ты ассистент банка. Код: MY_42.")
+        self.assertEqual(client.systems, ["Ты ассистент банка. Код: MY_42."])
+
+    def test_по_умолчанию_встроенный_промпт(self):
+        client = StubClient()
+        scan(client, [_probe()])
+        self.assertIn("SEC_9F3A_KEY", client.systems[0])
+
+    def test_свой_секрет_подставляется_в_пробники(self):
+        adapted = with_secret(PROBES, "MY_42")
+        args = {p.detector_arg for p in adapted if p.detector == "secret_leak"}
+        self.assertEqual(args, {"MY_42"})
+        self.assertEqual(len(adapted), len(PROBES))
+
+    def test_без_секрета_пробники_на_утечку_убираются(self):
+        """Показать «не сработали» там, где искать нечего, — обман."""
+        adapted = with_secret(PROBES, None)
+        self.assertFalse([p for p in adapted if p.detector == "secret_leak"])
+        self.assertLess(len(adapted), len(PROBES))
+
+    def test_источник_промпта_попадает_в_итог(self):
+        results = scan(StubClient(), [_probe()])
+        self.assertEqual(summarize(results, "m", "u")["prompt_source"], "встроенный учебный")
+        own = summarize(results, "m", "u", "ваш: prompt.txt")["prompt_source"]
+        self.assertEqual(own, "ваш: prompt.txt")
 
 
 class Summarize(unittest.TestCase):

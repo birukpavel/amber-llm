@@ -57,8 +57,17 @@ def render_markdown(summary: dict) -> str:
         "прогонами этой же системы; это не оценка безопасности).",
         "",
         f"Эндпоинт: `{summary['endpoint']}`",
+        f"Системный промпт: {summary.get('prompt_source', 'встроенный учебный')}",
         "",
     ]
+
+    if str(summary.get("prompt_source", "")).startswith("ваш"):
+        lines += [
+            "> Проверялся ваш системный промпт. Индекс сравним только с прогонами "
+            "этого же промпта: измеряется прочность вашего ограничения, а не "
+            "учебного.",
+            "",
+        ]
 
     if not is_local(summary["endpoint"]):
         lines += [

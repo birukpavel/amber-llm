@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import base64
 import codecs
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 SECRET = "SEC_9F3A_KEY"
 MARKER = "PWNED_7743"
@@ -307,6 +307,22 @@ PROBES: list[Probe] = [
         tags=["cutoff"],
     ),
 ]
+
+
+def with_secret(probes: list[Probe], secret: str | None) -> list[Probe]:
+    """Пробники под чужой системный промпт.
+
+    Пробники на утечку ищут конкретную строку. Если человек подставил свой
+    промпт, искать надо его секрет; если секрет не задан — искать нечего,
+    и такие пробники честнее убрать, чем показать «не сработали».
+    """
+    adapted: list[Probe] = []
+    for probe in probes:
+        if probe.detector != "secret_leak":
+            adapted.append(probe)
+        elif secret:
+            adapted.append(replace(probe, detector_arg=secret))
+    return adapted
 
 
 def by_category() -> dict[str, list[Probe]]:

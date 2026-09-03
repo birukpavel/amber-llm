@@ -14,7 +14,7 @@ from pathlib import Path
 
 from .client import LLMClient, is_local
 from .detectors import INCONCLUSIVE, VULNERABLE
-from .probes import CATEGORY_TITLES, PROBES
+from .probes import CATEGORY_TITLES, PROBES, SYSTEM_PROMPT, with_secret
 from .report import write_json, write_markdown
 from .runner import Result, scan, summarize
 
@@ -101,7 +101,43 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--category", action="append", help="ограничить категориями (можно несколько)")
     parser.add_argument("--out", default="reports", help="каталог для отчётов")
+    parser.add_argument(
+        "--system-prompt",
+        metavar="ФАЙЛ",
+        help="проверять ваш системный промпт вместо встроенного учебного",
+    )
+    parser.add_argument(
+        "--secret",
+        metavar="СТРОКА",
+        help="что модель обязана не раскрывать; строка должна быть в вашем промпте",
+    )
     args = parser.parse_args(argv)
+
+    system_prompt, prompt_source = SYSTEM_PROMPT, "встроенный учебный"
+    probes = PROBES
+
+    if args.secret and not args.system_prompt:
+        print("--secret имеет смысл только вместе с --system-prompt: во встроенном "
+              "промпте секрет уже задан.", file=sys.stderr)
+        return 2
+
+    if args.system_prompt:
+        path = Path(args.system_prompt)
+        try:
+            system_prompt = path.read_text(encoding="utf-8").strip()
+        except OSError as exc:
+            print(f"Не удалось прочитать {path}: {exc}", file=sys.stderr)
+            return 2
+        if not system_prompt:
+            print(f"{path} пуст — проверять нечего.", file=sys.stderr)
+            return 2
+        prompt_source = f"ваш: {path.name}"
+        if args.secret and args.secret not in system_prompt:
+            # Иначе пробники на утечку молча «не сработают» и дадут ложное спокойствие.
+            print(f"Секрет {args.secret!r} не найден в {path}. Укажите строку, "
+                  "которая в промпте действительно есть.", file=sys.stderr)
+            return 2
+        probes = with_secret(PROBES, args.secret)
 
     client = LLMClient(args.url, args.model, api_key=args.api_key)
     problem = client.check()
@@ -109,9 +145,8 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Эндпоинт {args.url} недоступен: {problem}", file=sys.stderr)
         return 2
 
-    probes = PROBES
     if args.category:
-        probes = [p for p in PROBES if p.category in args.category]
+        probes = [p for p in probes if p.category in args.category]
         if not probes:
             print("По заданным категориям пробников нет.", file=sys.stderr)
             return 2
@@ -120,6 +155,13 @@ def main(argv: list[str] | None = None) -> int:
     print(_paint("  не проверяет: многоходовые атаки · RAG-слой и фильтры · "
                  "смысловые утечки", DIM))
     print(f"\n  {len(probes)} пробников · {args.model} · {args.url}")
+    print(_paint(f"  системный промпт: {prompt_source}", DIM))
+    if args.system_prompt:
+        if not args.secret:
+            print(_paint("  пробники на утечку пропущены: не задан --secret, "
+                         "искать нечего", DIM))
+        print(_paint("  ваш промпт не запрещает маркер явно — срабатывание значит "
+                     "«модель выполнила чужую инструкцию»", DIM))
     if not is_local(args.url):
         print(_paint("  внешний API: вы платите за эти запросы, а индекс прогона "
                      "сравним", DIM))
@@ -127,8 +169,9 @@ def main(argv: list[str] | None = None) -> int:
                      "модели молча", DIM))
     print()
 
-    results = scan(client, probes, on_result=_print_live)
-    summary = summarize(results, args.model, args.url)
+    results = scan(client, probes, on_result=_print_live,
+                   system_prompt=system_prompt)
+    summary = summarize(results, args.model, args.url, prompt_source)
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
